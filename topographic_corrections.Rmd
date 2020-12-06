@@ -1,0 +1,60 @@
+---
+title: "Topographic corrections of satellite images in R"
+author: "Montesino-SanMartin, Manuel"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    toc_collapsed: true
+    number_sections: true
+    theme: united
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+------------------------------------------------------------------------
+
+The amount of techniques for processing satellite imagery can be overwhelming. This tutorial is an attempt to summarize and organize some of these techniques, focusing on those available in `R` (either native or via third-party software, e. g. [SAGA](http://www.saga-gis.org/en/index.html)). Other methods are also described, but just enough to provide some context and consider the strengths and limitations in using `R` as a tool for pre-processing satellite images.
+
+------------------------------------------------------------------------
+
+# Intro
+
+The topic of this tutorial is the **topographic correction**, i.e. a group of techniques that correct for the differences in radiance measured at the sensor due to the terrain elevation and orientation. The tutorial gives:
+
+1.  An introduction to the basics of topographic correction ([Section 1](##The%20basics%20of%20pansharpening)),
+
+2.  An overview of methods ([Section 2](##Overview)), and
+
+3.  Descriptions of some methods ([Section 3](##Methods:%20Component%20Substitution)), including a brief theoretical explanations and simple and reproducible examples.
+
+To follow the basics of this tutorial, download this repository and make it your working directory. Also, you need to install [`RStoolbox`](http://bleutner.github.io/RStoolbox/) (Leutner et al., 2019), [`tmap`](https://github.com/mtennekes/tmap) (Tennekes, 2018) and [`raster`](https://rspatial.org/raster/) (Hijamns 2020). If not installed already, type:
+
+```{r, eval=FALSE}
+install.packages("raster")
+install.packages("RStoolbox")
+install.packages("tmap")
+```
+
+Make sure to load them in working environment running:
+
+```{r packages, message=FALSE, warning=FALSE}
+library("raster")
+library("RStoolbox")
+library("tmap")
+```
+
+For this tutorial, we built the `compare_vis()` function, which can be found in [the repository](https://github.com/mmontesinosanmartin/pansharpen_r). The function has two inputs, the original (`ms.img` attribute) and the corrected multi-spectral images (`topocor.img` attribute). `compare_vis()` is just a wrapper function of `tmap` instructions that display side-by-side the original and the corrected image. One way to load this function into `R` is as follows:
+
+```{r compare_vis}
+source("./R/compare_vis.R")
+```
+
+# The basics
+
+Terrain orientation and slope can greatly influence the amount the amount of illumination received by the earth's surface and therefore having an impact on the radiance measured by the satellite. **Topographic corrections** are methods to correct the satellite measurements radiometrically to obtain the values as if they were observed on a flat surface.
+
+These topographic corrections are different from the terrain corrections which are applied in level-1 products. Terrain corrections are geometric methods intended to obtain the pixel values as if they were observed from above. Topographic corrections can be important, sometimes even more than atmospheric corrections (), where the region of interest is rugged or the sun elevation is low (as in winter).
