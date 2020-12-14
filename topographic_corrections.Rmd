@@ -9,6 +9,7 @@ output:
     toc_collapsed: true
     number_sections: true
     theme: united
+bibliography: bib.bib
 ---
 
 ```{r setup, include=FALSE}
@@ -17,7 +18,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ------------------------------------------------------------------------
 
-The amount of techniques for processing satellite imagery can be overwhelming. This tutorial is an attempt to summarize and organize some of these techniques, focusing on those available in `R` (either native or via third-party software, e. g. [SAGA](http://www.saga-gis.org/en/index.html)). Other methods are also described, but just enough to provide some context and consider the strengths and limitations in using `R` as a tool for pre-processing satellite images.
+The amount of techniques for processing satellite imagery can be overwhelming. This tutorial is an attempt to summarize and organize some of these techniques, focusing on those available in `R` (native or via third-party software, e. g. [SAGA](http://www.saga-gis.org/en/index.html)). Other methods (if any) are also described, but just enough to provide some context. Knowing other methods will help to balance strengths and limitations of using `R` as a tool for pre-processing satellite images.
 
 ------------------------------------------------------------------------
 
@@ -53,8 +54,169 @@ For this tutorial, we built the `compare_vis()` function, which can be found in 
 source("./R/compare_vis.R")
 ```
 
+------------------------------------------------------------------------
+
 # The basics
 
-Terrain orientation and slope can greatly influence the amount the amount of illumination received by the earth's surface and therefore having an impact on the radiance measured by the satellite. **Topographic corrections** are methods to correct the satellite measurements radiometrically to obtain the values as if they were observed on a flat surface.
+The orientation/slope of the terrain can greatly influence the amount of illumination that the ground receives. Disparities in the radiation received cause variations in the amount of radiation reflected. Thus, two locations with the same land cover can be perceived as different. **Topographic corrections** are techniques that compensate for the variations in reflectance caused by the terrain *to obtain the values as if they were observed on a flat surface*. Note that these corrections are different from the terrain corrections applied in Level-1 products, which are corrections obtain the pixel values as if they were observed from above (vs. on a flat surface)([@guide2017]).
 
-These topographic corrections are different from the terrain corrections which are applied in level-1 products. Terrain corrections are geometric methods intended to obtain the pixel values as if they were observed from above. Topographic corrections can be important, sometimes even more than atmospheric corrections (), where the region of interest is rugged or the sun elevation is low (as in winter).
+Topographic corrections are recommended when studying regions with rugged terrain and during seasons when the sun elevation is low (as winter). Topographic corrections can be important, sometimes even more than atmospheric corrections ([@topo2013]), but they are not always required. In this tutorial we work with a Landsat-8 image captured on November $4^{th}$, 2018 which covers a mountainous region in northern Madrid (Spain).
+
+<center>
+
+![Fig. 1: Mountainous region in northern Madrid. Image captured by Landsat-8 on the 4th of November, 2019](img/topo.png "region of interest"){width="350"}
+
+\</center\>
+
+Which can be loaded as follows:
+
+```{r topo_img}
+load("./data/topo_dem.RData")
+```
+
+Topographic corrections are based on **illumination models**. The model calculates the fraction of light received in any location due to the terrain orientation/slope and sun position. Illumination models help to determine where and by how much the reflectance has to be compensated. The following section describes a simple but powerful illumination model.
+
+------------------------------------------------------------------------
+
+## Illumination model
+
+### Model definition
+
+<center>
+
+![Fig. 2: Terrain-sun relative position. Angle definitions.](img/angle_definition.png){width="350"}
+
+\</center\>
+
+Two characteristics of the terrain determine the fraction of illumination received by the ground:
+
+-   **Slope (**$\beta$**)**: It is the inclination of the terrain relative to the horizontal plane. When the terrain is flat, the slope equals zero ($\beta = 0$). The greater the inclination of the terrain, the lower is the radiation density received.
+
+-   **Aspect (**$\phi_n$**)**: It is the orientation of the terrain relative to the north. When the surface is oriented south, the terrain aspect equals 90 degrees or $\pi$ radians ($\phi_n = 90$). In the northern hemisphere, hillsides facing north receive less light than their south-facing counterparts.
+
+In `R`, the aspect and slope can be easily derived from Digital Elevation Models (DEM) using the `raster` package and its function `terrain()`. Here, we use a $25m$ resolution DEM provided by the [Spanish National Geographic Institute](http://centrodedescargas.cnig.es/CentroDescargas/locale?request_locale=en) for the region seen in Fig. 1:
+
+```{r terrain_par}
+load("./data/topo_dem.RData")
+terrain.par <- terrain(dem, c("slope", "aspect"))
+```
+
+The illumination also varies with the position of the sun, which is defined by:
+
+-   **Solar elevation angle** ($\theta_v$)**:** It is the angle between a horizontal surface and a line pointing towards the sun. When the sun is at sunset, the elevation equals to zero ($\theta_v = 0$). When the angle is relative to the vertical axis, then is called **solar zenith angle** ($\theta_s$). The radiation density is maximum when the sun is perpendicular to the ground slope, i.e. around noon for a flat surface.
+
+-   **Solar azimuth angle (**$\phi_s$**):** It is the angle between a line pointing towards the sun and the north direction. Along the day, the sun travels from east to west, varying $\phi_s$ from approximately $90$ to $270$ degrees. The maximum solar radiation is reached when the solar azimuth angle and the terrain aspect match.
+
+The position of the sun at the moment a Landsat image was captured is provided in the associated metadata file (*MTL*).This metadata contains two fields, SUN_AZIMUTH and the SUN_ELEVATION providing the angles in degrees, which can be copied manually or using the function `readMeta()` from the `RStoolbox` package ([@rstoolbox2019]).
+
+```{r sun_par}
+library(RStoolbox)
+sun.par <- readMeta("./Data/LC08_L1TP_201031_20181104_20181115_01_T1_MTL.txt")
+sun.par$SOLAR_PARAMETERS["elevation"]
+sun.par$SOLAR_PARAMETERS["azimuth"]
+```
+
+All these considerations help to build the mathematical illumination model defined below. The model computes the illumination component that is normal to the ground which represents the equivalent amount of radiation that would reach the ground from a perpendicular source:
+
+$$
+cos(\gamma_i) = cos(\beta) \times cos(\theta_s) + sin(\beta) \times sin(\theta_s) \times cos(\phi_s - \phi_n)
+$$
+
+In `R`, this calculation can be done for each pixel of the region of interest, using the `hillShade()` function from the `raster` package:
+
+```{r hillshade}
+illu <- hillShade(slope = terrain.par$slope,
+                  aspect = terrain.par$aspect,
+                  angle = sun.par$SOLAR_PARAMETERS["elevation"],
+                  direction = sun.par$SOLAR_PARAMETERS["azimuth"])
+```
+
+With this model we could simulate the cast shadows at any time of the day and year period.
+
+### Model rationale
+
+<center>
+
+![Fig. 4: Representation of the illumination model and its calculations](img/illumination_model.PNG)
+
+\<\center\>
+
+As mentioned earlier, the model computes the illumination component perpendicular to the ground surface (orange vector along the normal direction in *Fig. 4A*). Assuming that the illumination has a value of $1$, the orange vector is 1 multiplied by the cosine of the angle between the solar ray (shown in yellow) and the normal vector, called **incidence angle** ($\gamma_i$ ). The orange vector is the sum of the horizontal (blue) and vertical (green) components, here referred as $h$ and $v$ in Eq. 2:
+
+$$
+cos(\gamma_i) = h + v
+$$
+
+For the horizontal component (Eq. 3), first the model calculates the solar ray component on the horizontal plane (no. (1) in *Fig. 4B*). This component is the cosine of the sun elevation angle or the sine of the solar zenith angle ($sin(\theta_s)$). The component of the resulting vector onto the normal direction is the cosine of the angle between the two (no. (2) in *Fig. 4B*), which is the difference between the terrain aspect ($\phi_n$) and the solar azimuth angle ($\phi_s$). The result is re-scaled considering a unit normal vector, which has an horizontal component equal to $sin(\beta)$. The vertical component (Eq. 4) is the cosine of the of the solar zenith angle (*Fig. 4C*). The component is re-scaled considering a unit normal vector, which has a vertical component equal to $cos(\beta)$.
+
+$$
+h = sin(\theta_s) \times cos(\phi_n - \phi_s) \times sin(\beta)
+$$
+
+$$
+v = cos(\theta_s) \times cos(\beta)
+$$
+
+Replacing $h$ and $v$ in Eq. 2 and rearranging the terms gives the last equation presented in the previous section.
+
+# Overview
+
+# Methods
+
+## C-method
+
+[@statc1982]
+
+$$
+L_{corr, \lambda} = L_{\lambda} \times \frac{cos\theta_s + C_{\lambda}}{cos\gamma_i + C_{\lambda}}
+$$
+
+```{r topo_c}
+ls8.cmet <- topCor(ls8.raw,
+                   dem,
+                   solarAngles = c(sun.azim,sun.znt),
+                   method = "C")
+compare_vis(ls8.raw, ls8.cmet, titles = c("Raw", "C-method"))
+```
+
+## Minnaert
+
+[@minnaert1941]
+
+$$
+L_{corr, \lambda} = L_{\lambda} \times \left(\frac{cos\theta_s}{cos\gamma_i}\right)^k
+$$
+
+```{r topo_minn}
+ls8.minn <- topCor(ls8.raw,
+                   dem,
+                   solarAngles = c(sun.azim,sun.znt),
+                   nStrat = 50,
+                   method = "minnaert")
+compare_vis(ls8.raw, ls8.minn, titles = c("Raw", "Minnaert"))
+```
+
+## Statistical method
+
+[@statc1982]
+
+$$
+L_{corr,\lambda} = L_{\lambda} \times \left(A cos\theta_s+ B \right)+ \bar{L}_{\lambda}
+$$
+
+```{r topo_stat}
+ls8.stat <- topCor(ls8.raw,
+                   dem,
+                   solarAngles =  c(sun.azim,sun.znt),
+                   method = "stat")
+compare_vis(ls8.raw, ls8.stat, titles = c("Raw", "Statistical"))
+```
+
+```{r}
+sun.elev <- (pi/180) * 31
+sun.azim <- (pi/180) * 162
+sun.zent <-  pi/2 - elev
+
+```
+
+# References
